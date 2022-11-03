@@ -1,0 +1,235 @@
+---
+title: "Assignment 3"
+author: "Esther Chen"
+date: "2022-10-16"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(results = "hide", message = FALSE)
+```
+
+##Set Up
+```{r}
+#Load packages
+library(rvest)
+library(sf)
+library(tidyverse)
+library(jsonlite)
+library(tidycensus)
+library(ggplot2)
+```
+
+#Part 1
+
+```{r}
+#Read in data
+emergencyVisits <- fromJSON("https://data.cityofnewyork.us/resource/2nwg-uqyg.json?$limit=3000")
+```
+
+##Question 1
+```{r}
+emergencyVisits$date <- as.Date(emergencyVisits$date)
+```
+
+```{r}
+emergencyVisits$date
+```
+
+##Question 2
+```{r}
+head(emergencyVisits)
+```
+The number of ED visits is a character.
+
+```{r}
+#Change the character to integer
+emergencyVisits$total_ed_visits <- strtoi(emergencyVisits$total_ed_visits)
+```
+
+##Question 3
+
+```{r}
+#Order by date
+emergencyVisits <- arrange(emergencyVisits, date)
+```
+```{r}
+#Most recent 300 visits
+recentvisits <- emergencyVisits[2701:3000,]
+```
+
+##Question 4
+```{r}
+#Visits per zip code
+totalrecentvisits <- recentvisits %>%
+  group_by(mod_zcta) %>%
+  summarise(Total = sum(total_ed_visits))
+
+totalvisits <- emergencyVisits %>%
+  group_by(mod_zcta) %>%
+  summarise(Total = sum(total_ed_visits))
+```
+
+#Part 2
+```{r}
+#Map of zipcodes
+NYCmap = st_read("C:/Users/jk/Documents/ZIP_CODE_040114.shp")
+
+ggplot(sample_frac(NYCmap)) + geom_sf() 
+```
+
+#Part 3
+
+##Question 6
+```{r}
+#Joining the data
+NYCmapChr = mutate(NYCmap, mod_zcta = as.character(ZIPCODE))
+NYCmapZip = select(NYCmapChr, mod_zcta, geometry)
+
+recentvisitsmap <- merge(NYCmapZip, recentvisits, by="mod_zcta")
+
+totalvisitsmap <-merge(NYCmapZip, totalvisits, by="mod_zcta")
+
+totalrecentvisitsmap <- merge(NYCmapZip, totalrecentvisits)
+```
+
+##Question 7 
+```{r}
+plot(totalvisitsmap)
+```
+
+#Part 4
+
+```{r}
+#Set API key
+census_api_key("98e447b6bc529e5f36793dc8ff9dac0b8981f37a")
+
+#Get data from api
+censusData = load_variables(2018, "acs5", cache=T)
+populationData = get_acs(geography = "zcta",
+variables = 'B01003_001',
+geometry = FALSE)
+
+#Remove the extra tag
+populationData$mod_zcta = sub("ZCTA5 ", "", populationData$NAME)
+
+
+#Rename the column
+populationData =
+populationData %>%
+rename(population = estimate)
+```
+
+##Question 8
+```{r}
+#Merge the population data with my main dataset
+
+populationvisits <- merge(totalvisitsmap, populationData, by="mod_zcta")
+
+```
+
+##Question 9
+```{r}
+#Calculate visits per inhabitant
+populationvisits <- populationvisits %>%
+  mutate(visits_per_inhabitant = Total/population)
+```
+#Part 5
+```{r}
+#Download poverty data from api
+vars = c(poverty = 'B17001_002')
+povertyData = get_acs(geography = "zcta",
+variables = vars,
+geometry = FALSE)
+
+povertyData$mod_zcta = sub("ZCTA5 ", "", povertyData$NAME)
+
+povertyData = povertyData %>% rename(povertyCount = estimate)
+```
+#Part 6
+##Question 10
+```{r}
+#Inner join with population data
+povertypopulation <- merge(populationvisits, povertyData, by="mod_zcta")
+```
+
+##Question 11
+```{r}
+#Calculate the poverty rate
+povertypopulation = povertypopulation %>%
+  mutate(poverty_rate = povertyCount/population)
+```
+#Part 7
+##Question 12-14
+```{r}
+#Analyze the relationship between poverty rate and the number of visits
+
+povertyVisits <- lm(visits_per_inhabitant ~ poverty_rate, data = povertypopulation)
+
+summary(povertyVisits)
+
+plot(x = povertypopulation$poverty_rate, y = povertypopulation$visits_per_inhabitant)
+```
+
+There is a slight positive relationship between the poverty rate of a zip code and the number of emergency room visits per person. 
+
+#Part 8
+#Question 15 and 16
+```{r}
+#Get data from API
+vars = c(age = 'B01002_001')
+ageData = get_acs(geography = "zcta", variables = vars, geometry = FALSE)
+
+ageData$mod_zcta = sub("ZCTA5 ","",ageData$NAME)
+
+ageData = ageData %>%
+  rename(medianAge = estimate)
+
+#Merge data
+populationAge <- merge(populationvisits, ageData, by="mod_zcta")
+
+#Analyze relationship
+ageVisits <- lm(Total ~ medianAge, data = populationAge)
+
+plot(populationAge$medianAge, populationAge$Total)
+
+summary(ageVisits)
+```
+There is a negative association between the median age of a zip code and the total number of hospital visits in that zip code. 
+#Part 9
+##Question 17 and 18
+```{r}
+vars = c('B02001_002')
+ethnicityData = get_acs(geography = "zcta", variables = vars, geometry = FALSE)
+ethnicityData = ethnicityData %>% rename(whiteAloneCount = estimate)
+ethnicityData$mod_zcta = sub("ZCTA5 ","",ethnicityData$NAME)
+
+#Merge data and calculate percentage of population that stated they are "White Alone".
+
+populationEthnicity <- merge(populationvisits, ethnicityData, by="mod_zcta") 
+
+populationEthnicity <- populationEthnicity %>%
+  mutate(percentWhite = whiteAloneCount/population)
+```
+
+
+```{r}
+populationDat <- populationvisits %>%
+  mutate(percentWhite = populationEthnicity$percentWhite)
+
+populationDat <- populationDat %>%
+  mutate(medianAge = populationAge$medianAge)
+
+populationDat <- populationDat %>%
+  mutate(povertyRate = povertypopulation$poverty_rate)
+```
+#Part 10
+##Question 19 and 20
+```{r}
+#Multilinear regression and analysis
+mlr <- lm(formula = visits_per_inhabitant ~ percentWhite + medianAge + povertyRate, data= populationDat)
+
+summary(mlr)
+```
+
+By taking a look at the coefficients, we can see that being white and having a higher median age actually has slightly negative association with the rate of emergency room visits. And we can see that poverty has a positive relationship with emergency room visits. It looks like the factor with the largest association is poverty. I would say this makes sense because a person's ability to get preventative care is deeply related to their economic status. Therefore it could lead to more emergency and severe cases of illness before they finally seek treatment. 
